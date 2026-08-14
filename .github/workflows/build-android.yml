@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Free up runner disk space
+      # Step 1: Free runner disk space
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -37,7 +37,7 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 5: Safely configure API credentials (only if secret is provided)
+      # Step 5: Safely configure API credentials
       - name: Configure API Credentials
         env:
           APP_ID: ${{ secrets.TDESKTOP_API_ID || secrets.API_ID || secrets.APP_ID }}
@@ -56,11 +56,11 @@ jobs:
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 7: Build Standalone Release APK
+      # Step 7: Build Standalone Release APK only
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --parallel
+          ./gradlew :TMessagesProj_AppStandalone:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
 
       # Step 8: Upload the compiled APK artifact
       - name: Upload APK Artifact
@@ -68,5 +68,5 @@ jobs:
         with:
           name: Telegram-Android-NoAds
           path: |
+            TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
             TMessagesProj/build/outputs/apk/**/*.apk
-            TMessagesProj_App/build/outputs/apk/**/*.apk
