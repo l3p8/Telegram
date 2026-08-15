@@ -1,4 +1,4 @@
-name: Build Telegram Android (No Ads)
+name: Build Telegram Android (New Standalone App)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Free runner disk space
+      # Step 1: Reclaim disk space
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -29,7 +29,7 @@ jobs:
         with:
           ndk-version: r27c
 
-      # Step 4: Checkout Telegram Android source code
+      # Step 4: Checkout official Telegram Android source
       - name: Checkout Telegram Android
         uses: actions/checkout@v4
         with:
@@ -37,7 +37,35 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 5: Safely configure API credentials
+      # Step 5: Change Package ID & App Name to create an independent app
+      - name: Customize App Identity
+        run: |
+          # 1. Change the Application ID / Package Name
+          sed -i 's/APP_PACKAGE=org\.telegram\.messenger/APP_PACKAGE=org.telegram.messenger.custom/g' gradle.properties
+          
+          # 2. Change the App display name
+          sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram NoAds<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
+
+      # Step 6: Generate a brand new custom signing keystore
+      - name: Generate Custom Signing Key
+        run: |
+          mkdir -p TMessagesProj/config
+          keytool -genkeypair -v \
+            -keystore TMessagesProj/config/release.keystore \
+            -alias customkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass mysecretpass123 \
+            -keypass mysecretpass123 \
+            -dname "CN=TelegramCustom, OU=Client, O=AdFree, L=Munich, C=DE"
+
+          # Update gradle.properties with the new keystore passwords
+          sed -i 's/RELEASE_KEY_PASSWORD=.*/RELEASE_KEY_PASSWORD=mysecretpass123/g' gradle.properties
+          sed -i 's/RELEASE_KEY_ALIAS=.*/RELEASE_KEY_ALIAS=customkey/g' gradle.properties
+          sed -i 's/RELEASE_STORE_PASSWORD=.*/RELEASE_STORE_PASSWORD=mysecretpass123/g' gradle.properties
+
+      # Step 7: Safely configure Telegram API credentials
       - name: Configure API Credentials
         env:
           APP_ID: ${{ secrets.TDESKTOP_API_ID || secrets.API_ID || secrets.APP_ID }}
@@ -51,22 +79,22 @@ jobs:
             echo "No custom API secrets found; keeping default build keys."
           fi
 
-      # Step 6: Patch UserConfig.java to remove sponsored messages (ads)
+      # Step 8: Patch UserConfig.java to remove sponsored messages (ads)
       - name: Patch Ad-Free Status
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 7: Build Standalone Release APK only
+      # Step 9: Build Standalone Release APK
       - name: Build APK
         run: |
           chmod +x gradlew
           ./gradlew :TMessagesProj_AppStandalone:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
 
-      # Step 8: Upload the compiled APK artifact
+      # Step 10: Upload the standalone APK artifact
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: Telegram-Android-NoAds
+          name: Telegram-Android-Standalone-NoAds
           path: |
             TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
             TMessagesProj/build/outputs/apk/**/*.apk
