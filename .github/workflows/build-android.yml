@@ -8,13 +8,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Free runner disk space
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache
           sudo rm -rf /usr/local/share/boost
+          sudo docker system prune -af --volumes || true
+          sudo apt-get clean
 
+      # Step 2: Setup Swap Space
       - name: Setup Swap Space
         run: |
           sudo swapoff -a || true
@@ -24,17 +28,20 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: Set up Java 17
+      # Step 3: Set up Java 11 (Matches Gradle 7.2)
+      - name: Set up JDK 11
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '11'
 
-      - name: Set up Android NDK (r27c)
+      # Step 4: Set up Android NDK (r27c)
+      - name: Set up NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
 
+      # Step 5: Checkout Telegram-FOSS Source
       - name: Checkout Telegram-FOSS Source
         uses: actions/checkout@v5
         with:
@@ -42,16 +49,24 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Patch UserConfig.java for ad-free operation
+      # Step 6: Fix legacy JVM parameters in gradle.properties
+      - name: Clean Legacy JVM Flags
+        run: |
+          # Replace obsolete MaxPermSize with clean modern JVM memory settings
+          sed -i 's/org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4096M -Dfile.encoding=UTF-8/g' gradle.properties
+
+      # Step 7: Patch UserConfig.java for ad-free operation
       - name: Patch Ad-Free Status
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
+      # Step 8: Build FOSS APK
       - name: Build FOSS APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease -x lint -x test --no-daemon --parallel
+          ./gradlew assembleRelease -x lint -x test --no-daemon --parallel --stacktrace
 
+      # Step 9: Upload APK Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v5
         with:
