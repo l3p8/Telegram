@@ -29,7 +29,7 @@ jobs:
         with:
           ndk-version: r27c
 
-      # Step 4: Checkout source using v5
+      # Step 4: Checkout source code using v5
       - name: Checkout Telegram Android
         uses: actions/checkout@v5
         with:
@@ -37,20 +37,22 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 5: Change Package ID & App Name to create an independent app
+      # Step 5: Change Package ID, google-services.json, & App Name
       - name: Customize App Identity
         run: |
-          # 1. Change the Application ID / Package Name
+          # 1. Change the Application ID in gradle.properties
           sed -i 's/APP_PACKAGE=org\.telegram\.messenger/APP_PACKAGE=org.telegram.messenger.custom/g' gradle.properties
           
-          # 2. Change the App display name
+          # 2. Update package_name in google-services.json to match
+          sed -i 's/org\.telegram\.messenger/org.telegram.messenger.custom/g' TMessagesProj/google-services.json
+          
+          # 3. Change the App display name
           sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram NoAds<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
 
-      # Step 6: Delete old keystore and generate a fresh unique signing key
+      # Step 6: Generate a brand new custom signing keystore
       - name: Generate Custom Signing Key
         run: |
           mkdir -p TMessagesProj/config
-          # Delete the old template keystore so keytool creates a clean new one
           rm -f TMessagesProj/config/release.keystore
 
           keytool -genkeypair -v \
@@ -91,13 +93,11 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_AppStandalone:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
+          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
 
-      # Step 10: Upload the standalone APK artifact using v5
+      # Step 10: Upload the standalone APK artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v5
         with:
           name: Telegram-Android-Standalone-NoAds
-          path: |
-            TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
-            TMessagesProj/build/outputs/apk/**/*.apk
+          path: '**/build/outputs/apk/**/*.apk'
