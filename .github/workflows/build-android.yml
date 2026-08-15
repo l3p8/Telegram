@@ -1,4 +1,4 @@
-name: Build Telegram Android (Ad-Free)
+name: Build Telegram Android ARM64 (No Ads)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Clean runner disk space
+      # Step 1: Free runner disk space
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -18,7 +18,7 @@ jobs:
           sudo docker system prune -af --volumes || true
           sudo apt-get clean
 
-      # Step 2: Set up 8GB Swap
+      # Step 2: Set up an 8GB Swapfile
       - name: Setup Swap Space
         run: |
           sudo swapoff -a || true
@@ -74,15 +74,17 @@ jobs:
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 9: Build Arm64 Release APK (Fast & compatible with all modern phones)
+      # Step 9: Build ARM64-v8a Release APK
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_App:assembleArm64Release -x lint -x test --no-daemon --parallel --stacktrace
+          ./gradlew :TMessagesProj_App:assembleAfatRelease \
+            -Pandroid.injected.build.abi=arm64-v8a \
+            -x lint -x test --no-daemon --parallel --stacktrace
 
       # Step 10: Upload the output APK
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v5
         with:
-          name: Telegram-Android-NoAds
+          name: Telegram-Android-ARM64-NoAds
           path: '**/build/outputs/apk/**/*.apk'
