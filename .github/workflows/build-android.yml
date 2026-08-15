@@ -37,7 +37,7 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 5: Configure Custom Package ID & App Name
+      # Step 5: Configure Custom Package ID & App Identity
       - name: Set Custom Package ID & Identity
         run: |
           CUSTOM_PKG="com.mycustom.telegram"
@@ -45,13 +45,10 @@ jobs:
           # 1. Update gradle.properties
           sed -i "s/APP_PACKAGE=.*/APP_PACKAGE=$CUSTOM_PKG/g" gradle.properties
           
-          # 2. Update BuildVars.java package constant
-          sed -i "s/public static String APP_PACKAGE = .*/public static String APP_PACKAGE = \"$CUSTOM_PKG\";/g" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          
-          # 3. Change display name
+          # 2. Change display name
           sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram Custom<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
           
-          # 4. Generate a valid google-services.json matching the custom package ID
+          # 3. Create google-services.json for the custom package ID
           cat <<EOF > TMessagesProj/google-services.json
           {
             "project_info": {
@@ -103,6 +100,10 @@ jobs:
           }
           EOF
 
+          # Copy google-services.json into App module as well
+          mkdir -p TMessagesProj_App
+          cp TMessagesProj/google-services.json TMessagesProj_App/google-services.json
+
       # Step 6: Create fresh unique signing keystore
       - name: Generate Custom Keystore
         run: |
@@ -123,7 +124,7 @@ jobs:
           sed -i 's/RELEASE_KEY_ALIAS=.*/RELEASE_KEY_ALIAS=customkey/g' gradle.properties
           sed -i 's/RELEASE_STORE_PASSWORD=.*/RELEASE_STORE_PASSWORD=mycustompass123/g' gradle.properties
 
-      # Step 7: Inject API credentials safely
+      # Step 7: Inject API credentials safely (if provided)
       - name: Configure API Credentials
         env:
           APP_ID: ${{ secrets.TDESKTOP_API_ID || secrets.API_ID || secrets.APP_ID }}
@@ -142,11 +143,11 @@ jobs:
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 9: Build the Standalone APK
+      # Step 9: Build ONLY the primary application release APK
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
+          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
 
       # Step 10: Upload the output APK
       - name: Upload APK Artifact
