@@ -1,4 +1,4 @@
-name: Build Custom Standalone Telegram (No Ads)
+name: Build Telegram Android (Standalone No Ads)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
           sudo docker system prune -af --volumes || true
           sudo apt-get clean
 
-      # Step 2: Set up an 8GB Swapfile to prevent OOM killer on R8 packaging
+      # Step 2: Set up an 8GB Swapfile to provide 15GB total memory
       - name: Setup Swap Space
         run: |
           sudo swapoff -a || true
@@ -50,75 +50,19 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 6: Configure Custom Package ID & App Identity
-      - name: Set Custom Package ID & Identity
+      # Step 6: Configure Standalone Web Package & App Identity
+      - name: Configure Package Identity
         run: |
-          CUSTOM_PKG="com.mycustom.telegram"
+          # 1. Set the official standalone package ID (installs side-by-side with Play Store Telegram)
+          sed -i 's/APP_PACKAGE=.*/APP_PACKAGE=org.telegram.messenger.web/g' gradle.properties
           
-          # 1. Update gradle.properties
-          sed -i "s/APP_PACKAGE=.*/APP_PACKAGE=$CUSTOM_PKG/g" gradle.properties
+          # 2. Allocate optimal heap memory for Gradle
           sed -i 's/org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx3584M -Dfile.encoding=UTF-8/g' gradle.properties
-          sed -i 's/android\.enableR8\.fullMode=true/android.enableR8.fullMode=false/g' gradle.properties
           
-          # 2. Change display name
-          sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram Custom<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
-          
-          # 3. Create matching google-services.json for custom package ID
-          cat <<EOF > TMessagesProj/google-services.json
-          {
-            "project_info": {
-              "project_number": "123456789",
-              "project_id": "telegram-custom",
-              "storage_bucket": "telegram-custom.appspot.com"
-            },
-            "client": [
-              {
-                "client_info": {
-                  "mobilesdk_app_id": "1:123456789:android:abcdef123456",
-                  "android_client_info": {
-                    "package_name": "$CUSTOM_PKG"
-                  }
-                },
-                "oauth_client": [],
-                "api_key": [
-                  {
-                    "current_key": "AIzaSyDummyKeyForBuildValidation12345"
-                  }
-                ],
-                "services": {
-                  "appinvite_service": {
-                    "other_platform_oauth_client": []
-                  }
-                }
-              },
-              {
-                "client_info": {
-                  "mobilesdk_app_id": "1:123456789:android:abcdef123457",
-                  "android_client_info": {
-                    "package_name": "$CUSTOM_PKG.beta"
-                  }
-                },
-                "oauth_client": [],
-                "api_key": [
-                  {
-                    "current_key": "AIzaSyDummyKeyForBuildValidation12345"
-                  }
-                ],
-                "services": {
-                  "appinvite_service": {
-                    "other_platform_oauth_client": []
-                  }
-                }
-              }
-            ],
-            "configuration_version": "1"
-          }
-          EOF
+          # 3. Change display name so it looks distinct on your launcher
+          sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram NoAds<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
 
-          mkdir -p TMessagesProj_App
-          cp TMessagesProj/google-services.json TMessagesProj_App/google-services.json
-
-      # Step 7: Create fresh unique signing keystore
+      # Step 7: Create unique signing keystore
       - name: Generate Custom Keystore
         run: |
           mkdir -p TMessagesProj/config
@@ -130,13 +74,13 @@ jobs:
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -storepass mycustompass123 \
-            -keypass mycustompass123 \
-            -dname "CN=TelegramCustom, OU=App, O=Independent, L=Berlin, C=DE"
+            -storepass mysecretpass123 \
+            -keypass mysecretpass123 \
+            -dname "CN=TelegramStandalone, OU=App, O=AdFree, L=Munich, C=DE"
 
-          sed -i 's/RELEASE_KEY_PASSWORD=.*/RELEASE_KEY_PASSWORD=mycustompass123/g' gradle.properties
+          sed -i 's/RELEASE_KEY_PASSWORD=.*/RELEASE_KEY_PASSWORD=mysecretpass123/g' gradle.properties
           sed -i 's/RELEASE_KEY_ALIAS=.*/RELEASE_KEY_ALIAS=customkey/g' gradle.properties
-          sed -i 's/RELEASE_STORE_PASSWORD=.*/RELEASE_STORE_PASSWORD=mycustompass123/g' gradle.properties
+          sed -i 's/RELEASE_STORE_PASSWORD=.*/RELEASE_STORE_PASSWORD=mysecretpass123/g' gradle.properties
 
       # Step 8: Inject API credentials safely
       - name: Configure API Credentials
@@ -157,15 +101,15 @@ jobs:
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 10: Build the Standalone APK with proper memory headroom
+      # Step 10: Build Standalone Release APK
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --stacktrace
+          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --stacktrace --info
 
       # Step 11: Upload the output APK
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v5
         with:
-          name: Telegram-Custom-Independent-NoAds
+          name: Telegram-Android-NoAds
           path: '**/build/outputs/apk/**/*.apk'
