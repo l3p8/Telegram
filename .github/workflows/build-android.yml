@@ -15,21 +15,34 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache
           sudo rm -rf /usr/local/share/boost
+          sudo docker system prune -af --volumes || true
+          sudo apt-get clean
 
-      # Step 2: Set up Java 17
+      # Step 2: Set up an 8GB Swapfile to prevent OOM killer on R8 packaging
+      - name: Setup Swap Space
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      # Step 3: Set up Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # Step 3: Set up Android NDK (r27c)
+      # Step 4: Set up Android NDK (r27c)
       - name: Set up NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
 
-      # Step 4: Checkout official Telegram Android source
+      # Step 5: Checkout official Telegram Android source
       - name: Checkout Telegram Android
         uses: actions/checkout@v5
         with:
@@ -37,18 +50,20 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      # Step 5: Configure Custom Package ID & App Identity
+      # Step 6: Configure Custom Package ID & App Identity
       - name: Set Custom Package ID & Identity
         run: |
           CUSTOM_PKG="com.mycustom.telegram"
           
           # 1. Update gradle.properties
           sed -i "s/APP_PACKAGE=.*/APP_PACKAGE=$CUSTOM_PKG/g" gradle.properties
+          sed -i 's/org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx3584M -Dfile.encoding=UTF-8/g' gradle.properties
+          sed -i 's/android\.enableR8\.fullMode=true/android.enableR8.fullMode=false/g' gradle.properties
           
           # 2. Change display name
           sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">Telegram Custom<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
           
-          # 3. Create google-services.json for the custom package ID
+          # 3. Create matching google-services.json for custom package ID
           cat <<EOF > TMessagesProj/google-services.json
           {
             "project_info": {
@@ -100,11 +115,10 @@ jobs:
           }
           EOF
 
-          # Copy google-services.json into App module as well
           mkdir -p TMessagesProj_App
           cp TMessagesProj/google-services.json TMessagesProj_App/google-services.json
 
-      # Step 6: Create fresh unique signing keystore
+      # Step 7: Create fresh unique signing keystore
       - name: Generate Custom Keystore
         run: |
           mkdir -p TMessagesProj/config
@@ -124,7 +138,7 @@ jobs:
           sed -i 's/RELEASE_KEY_ALIAS=.*/RELEASE_KEY_ALIAS=customkey/g' gradle.properties
           sed -i 's/RELEASE_STORE_PASSWORD=.*/RELEASE_STORE_PASSWORD=mycustompass123/g' gradle.properties
 
-      # Step 7: Inject API credentials safely (if provided)
+      # Step 8: Inject API credentials safely
       - name: Configure API Credentials
         env:
           APP_ID: ${{ secrets.TDESKTOP_API_ID || secrets.API_ID || secrets.APP_ID }}
@@ -138,18 +152,18 @@ jobs:
             echo "Using default Telegram credentials."
           fi
 
-      # Step 8: Patch UserConfig.java to remove sponsored messages (ads)
+      # Step 9: Patch UserConfig.java to remove sponsored messages (ads)
       - name: Patch Ad-Free Status
         run: |
           sed -i 's/return user\.premium;/return true;/g' TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java
 
-      # Step 9: Build ONLY the primary application release APK
+      # Step 10: Build the Standalone APK with proper memory headroom
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --parallel --stacktrace
+          ./gradlew :TMessagesProj_App:assembleAfatRelease -x lint -x test --no-daemon --stacktrace
 
-      # Step 10: Upload the output APK
+      # Step 11: Upload the output APK
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v5
         with:
