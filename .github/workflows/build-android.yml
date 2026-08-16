@@ -30,13 +30,18 @@ jobs:
       - name: Build Release APK with Gradle
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      # Step 2: Auto-locate, decode keystore, and sign with Android SDK apksigner
+      # Step 2: Auto-locate, decode keystore, and sign safely using env variables
       - name: Sign Release APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          # 1. Decode keystore from secret
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.jks
+          # 1. Decode keystore from environment variable
+          echo "$KEYSTORE_BASE64" | base64 --decode > release.jks
 
-          # 2. Automatically find the generated release APK file
+          # 2. Find the generated release APK file
           APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
           
           if [ -z "$APK_FILE" ]; then
@@ -48,20 +53,20 @@ jobs:
           echo "Found APK to sign at: $APK_FILE"
 
           # 3. Locate apksigner in Android SDK
-          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
           echo "Using apksigner at: $APKSIGNER"
 
-          # 4. Sign APK
-          $APKSIGNER sign \
+          # 4. Sign APK safely using env vars
+          "$APKSIGNER" sign \
             --ks release.jks \
-            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
-            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --key-pass "pass:$KEY_PASSWORD" \
             --out app-arm64-v8a-signed.apk \
             "$APK_FILE"
 
           # 5. Verify the signature
-          $APKSIGNER verify app-arm64-v8a-signed.apk
+          "$APKSIGNER" verify app-arm64-v8a-signed.apk
           echo "APK signed and verified successfully."
 
       # Step 3: Upload the signed APK
