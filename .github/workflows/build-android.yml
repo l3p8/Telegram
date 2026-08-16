@@ -1,4 +1,4 @@
-name: Build and Sign Android APK (arm64-v8a)
+name: Build and Sign Android APK
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build & Sign arm64-v8a APK
+    name: Build & Sign APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,25 +26,49 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build arm64-v8a Release APK
+      # Step 1: Build Release APK
+      - name: Build Release APK with Gradle
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
+      # Step 2: Auto-locate, decode keystore, and sign with Android SDK apksigner
       - name: Sign Release APK
-        uses: r0adkll/sign-android-release@v1
-        id: sign_app
-        with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
-          alias: ${{ secrets.KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: "34.0.0"
+        run: |
+          # 1. Decode keystore from secret
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.jks
 
-      - name: Upload Signed arm64-v8a APK
+          # 2. Automatically find the generated release APK file
+          APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
+          
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No release APK found!"
+            find . -name "*.apk"
+            exit 1
+          fi
+          
+          echo "Found APK to sign at: $APK_FILE"
+
+          # 3. Locate apksigner in Android SDK
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n 1)
+          echo "Using apksigner at: $APKSIGNER"
+
+          # 4. Sign APK
+          $APKSIGNER sign \
+            --ks release.jks \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --out app-arm64-v8a-signed.apk \
+            "$APK_FILE"
+
+          # 5. Verify the signature
+          $APKSIGNER verify app-arm64-v8a-signed.apk
+          echo "APK signed and verified successfully."
+
+      # Step 3: Upload the signed APK
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: app-arm64-v8a-release-signed
-          path: ${{ steps.sign_app.outputs.signedReleaseFile }}
+          path: app-arm64-v8a-signed.apk
           if-no-files-found: error
           retention-days: 14
