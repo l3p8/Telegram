@@ -1,4 +1,38 @@
-# Step 2: Decode keystore, auto-detect alias, and sign APK
+name: Build and Sign Android APK
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Sign APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Release APK with Gradle
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
       - name: Sign Release APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -9,33 +43,28 @@
           # 1. Cleanly decode keystore from base64
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
 
-          # 2. Automatically detect the real alias from the keystore
+          # 2. Automatically detect alias from keystore
           DETECTED_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" | grep -m1 "Alias name:" | sed 's/Alias name: //' | tr -d '\r\n')
-          
-          # Use secret alias if valid, otherwise fallback to auto-detected alias
           TARGET_ALIAS="${KEY_ALIAS:-$DETECTED_ALIAS}"
           if [ -z "$TARGET_ALIAS" ]; then
             TARGET_ALIAS="$DETECTED_ALIAS"
           fi
-
           echo "Using keystore alias: $TARGET_ALIAS"
 
-          # 3. Find the generated release APK file (afat / arm64)
+          # 3. Find the generated release APK file
           APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
-          
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: No release APK found!"
             find . -name "*.apk"
             exit 1
           fi
-          
           echo "Found APK to sign at: $APK_FILE"
 
           # 4. Locate apksigner in Android SDK
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
           echo "Using apksigner at: $APKSIGNER"
 
-          # 5. Sign APK with the auto-detected alias
+          # 5. Sign APK
           "$APKSIGNER" sign \
             --ks release.jks \
             --ks-key-alias "$TARGET_ALIAS" \
@@ -47,3 +76,11 @@
           # 6. Verify signature
           "$APKSIGNER" verify app-arm64-v8a-signed.apk
           echo "APK signed and verified successfully!"
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-arm64-v8a-release-signed
+          path: app-arm64-v8a-signed.apk
+          if-no-files-found: error
+          retention-days: 14
