@@ -33,15 +33,15 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply all modifications, fix Google Services JSON, and disable Lint
-      - name: Apply Telegram Mods & Disable Lint Errors
+      # 2. Apply Telegram modifications
+      - name: Apply Telegram Mods (Distinct App, 99 Accounts, No Updates)
         run: |
           echo "=== 1. Making the App Distinct ==="
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
           find . -name "google-services.json" | xargs sed -i \
-            's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
+            's/"package_name": "org\.telegram\.messenger"/"package_name": "org.telegram.messenger.mod"/g'
 
           find . -name "BuildVars.java" | xargs sed -i \
             's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
@@ -69,24 +69,26 @@ jobs:
           find . -name "LaunchActivity.java" | xargs sed -i -E \
             's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
 
-          echo "=== 4. Configure Compiler & Disable Lint Aborts ==="
+          echo "=== 4. Configure Compiler Properties ==="
           echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
           echo "android.enableR8.fullMode=false" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
-
-          # Strip other ABIs from Gradle flavors
-          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
-            's/"armeabi-v7a",\s*"arm64-v8a",\s*"x86",\s*"x86_64"/"arm64-v8a"/g; s/"armeabi-v7a",\s*"arm64-v8a"/"arm64-v8a"/g'
 
           echo "All modifications successfully applied!"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Compile the Release APK (skipping lintVital checks)
+      # 3. Build APK with Lint suppressed via project properties
       - name: Build arm64 Release APK
-        run: ./gradlew assembleAfatRelease --no-daemon --stacktrace -x lintVitalAfatRelease -x lintVitalAnalyzeAfatRelease
+        run: |
+          ./gradlew assembleAfatRelease \
+            --no-daemon \
+            --stacktrace \
+            -Pandroid.injected.build.abi=arm64-v8a \
+            -Pandroid.lint.abortOnError=false \
+            -Pandroid.lint.checkReleaseBuilds=false
 
       # 4. Auto-sign APK
       - name: Sign Release APK
