@@ -20,7 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Expand RAM/Swap so C++ compilation does not crash with OOM
+      # 1. Expand Swap memory to prevent compiler out-of-memory errors
       - name: Expand Swap Space
         uses: pierotofy/set-swap-space@master
         with:
@@ -33,26 +33,40 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply all modifications + restrict to arm64-v8a for faster build
-      - name: Apply Telegram Mods & Restrict to arm64-v8a
+      # 2. Apply all modifications, fix Google Services JSON, and lock to arm64-v8a
+      - name: Apply Telegram Mods (Distinct App, 99 Accounts, No Updates)
         run: |
           echo "=== 1. Making the App Distinct ==="
+          # Update Application ID across Gradle files
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
+          # Fix package name in google-services.json so Google Services plugin does not crash
+          find . -name "google-services.json" | xargs sed -i \
+            's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
+
+          # Fix Java BuildVars package name
+          find . -name "BuildVars.java" | xargs sed -i \
+            's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
+
+          # Update system sync / auth accounts
           find . -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" | xargs sed -i \
             's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
 
+          # Fix ContentProvider authorities
           find . -name "AndroidManifest.xml" | xargs sed -i \
             's/org\.telegram\.messenger\.provider/${applicationId}.provider/g; s/org\.telegram\.messenger\.notification_image_provider/${applicationId}.notification_image_provider/g'
 
+          # Rename App Name
           find . -name "strings.xml" | xargs sed -i -E \
             's/<string name="AppName">.*<\/string>/<string name="AppName">Telegram Mod<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">Telegram Mod<\/string>/g'
 
           echo "=== 2. Setting Account Limit to 99 ==="
+          # Java limits
           find . -name "UserConfig.java" | xargs sed -i -E \
             's/(MAX_ACCOUNT_COUNT\s*=\s*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT\s*=\s*)[0-9]+/\199/g'
 
+          # Native C++ tgnet limits
           find . -name "Defines.h" | xargs sed -i -E \
             's/(#define\s+MAX_ACCOUNT_COUNT\s+)[0-9]+/\199/g'
 
@@ -63,21 +77,22 @@ jobs:
           find . -name "LaunchActivity.java" | xargs sed -i -E \
             's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
 
-          echo "=== 4. Enforcing arm64-v8a and Memory Tuning ==="
-          # Restrict native ABI compiling strictly to arm64-v8a
-          find . -name "build.gradle" | xargs sed -i -E \
-            's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/g; s/abiFilters\s*=\s*\[[^]]*\]/abiFilters = ["arm64-v8a"]/g'
-
-          # Allocate memory safely to prevent OOM
+          echo "=== 4. Enforce arm64-v8a Compilation ==="
+          # Force AGP to strictly build arm64-v8a native libraries
+          echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
 
-          echo "All modifications applied successfully!"
+          # Strip other ABIs from Gradle flavors
+          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
+            's/"armeabi-v7a",\s*"arm64-v8a",\s*"x86",\s*"x86_64"/"arm64-v8a"/g; s/"armeabi-v7a",\s*"arm64-v8a"/"arm64-v8a"/g'
+
+          echo "All modifications successfully applied!"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Build only the Standalone APK (Fat/Release) instead of all permutations
+      # 3. Compile the Release APK
       - name: Build arm64 Release APK
         run: ./gradlew assembleAfatRelease --no-daemon --stacktrace
 
