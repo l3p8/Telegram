@@ -71,7 +71,11 @@ jobs:
 
           echo "=== 4. Configure Keystore for Gradle Packaging Task ==="
           mkdir -p TMessagesProj/config config
+          
+          # Delete any pre-existing keystores to prevent password mismatch
+          rm -f TMessagesProj/config/release.keystore config/release.keystore release.jks
 
+          # Generate a fresh release keystore
           keytool -genkeypair -v \
             -keystore TMessagesProj/config/release.keystore \
             -alias "telegramKey" \
@@ -109,7 +113,7 @@ jobs:
             -Pandroid.lint.abortOnError=false \
             -Pandroid.lint.checkReleaseBuilds=false
 
-      # 4. Safe Sign & Verify with apksigner (with automatic error recovery)
+      # 4. Safe Sign & Verify with apksigner
       - name: Sign Release APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -117,14 +121,6 @@ jobs:
         run: |
           USE_CUSTOM=false
 
-          # Test if the GitHub Secret keystore is valid before using it
+          # Test if the secret keystore is valid before using it
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks 2>/dev/null || true
-            if [ -f release.jks ] && keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
-              echo "Custom secret keystore validated successfully!"
-              SIGN_KEY="release.jks"
-              SIGN_PASS="$KEYSTORE_PASSWORD"
-              TARGET_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$SIGN_PASS" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
-              USE_CUSTOM=true
-            else
-              echo "Secret KEYSTORE_BASE64 is invalid or password mismatched. Falling back to generated release key
+            printf '%s' "$KEYSTORE_BASE64" | ba
