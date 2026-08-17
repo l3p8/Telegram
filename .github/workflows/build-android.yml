@@ -33,8 +33,8 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply Telegram modifications
-      - name: Apply Telegram Mods (Distinct App, 99 Accounts, No Updates)
+      # 2. Apply all Telegram modifications & inject required Gradle release keystore
+      - name: Apply Telegram Mods & Setup Keystore
         run: |
           echo "=== 1. Making the App Distinct ==="
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
@@ -69,18 +69,40 @@ jobs:
           find . -name "LaunchActivity.java" | xargs sed -i -E \
             's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
 
-          echo "=== 4. Configure Compiler Properties ==="
+          echo "=== 4. Configure Keystore for Gradle Packaging Task ==="
+          # Create the exact keystore directory Telegram's build.gradle looks for
+          mkdir -p TMessagesProj/config config
+
+          keytool -genkeypair -v \
+            -keystore TMessagesProj/config/release.keystore \
+            -alias "telegramKey" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "telegram123" \
+            -keypass "telegram123" \
+            -dname "CN=Telegram, OU=Dev, O=Telegram, L=Dubai, ST=Dubai, C=AE"
+
+          # Copy to fallback locations
+          cp TMessagesProj/config/release.keystore config/release.keystore 2>/dev/null || true
+
+          # Inject passwords into gradle.properties so Gradle packaging succeeds
+          echo "RELEASE_STORE_PASSWORD=telegram123" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=telegramKey" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=telegram123" >> gradle.properties
+
+          echo "=== 5. Configure Compiler Properties ==="
           echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
           echo "android.enableR8.fullMode=false" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
 
-          echo "All modifications successfully applied!"
+          echo "All modifications and keystore configurations successfully applied!"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Build APK with Lint suppressed via project properties
+      # 3. Build arm64 Release APK
       - name: Build arm64 Release APK
         run: |
           ./gradlew assembleAfatRelease \
@@ -90,39 +112,22 @@ jobs:
             -Pandroid.lint.abortOnError=false \
             -Pandroid.lint.checkReleaseBuilds=false
 
-      # 4. Auto-sign APK
+      # 4. Final Sign & Verify with apksigner
       - name: Sign Release APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
+          # Use provided secret keystore if present, else use generated release keystore
           if [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
-          fi
-
-          KEYSTORE_VALID=false
-          if [ -f release.jks ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            PRIVATE_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
-            if [ -n "$PRIVATE_ALIAS" ]; then
-              echo "Found valid PrivateKeyEntry: $PRIVATE_ALIAS"
-              KEYSTORE_VALID=true
-              TARGET_ALIAS="$PRIVATE_ALIAS"
-              SIGN_PASS="$KEYSTORE_PASSWORD"
-            fi
-          fi
-
-          if [ "$KEYSTORE_VALID" = false ]; then
-            echo "Auto-generating release key in runner..."
-            TARGET_ALIAS="release-key"
-            SIGN_PASS="releasePass123"
-            keytool -genkeypair -v -keystore release.jks \
-              -alias "$TARGET_ALIAS" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$SIGN_PASS" \
-              -keypass "$SIGN_PASS" \
-              -dname "CN=TelegramMod, OU=Dev, O=Personal, L=City, ST=State, C=US"
+            SIGN_KEY="release.jks"
+            SIGN_PASS="$KEYSTORE_PASSWORD"
+            TARGET_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$SIGN_PASS" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
+          else
+            SIGN_KEY="TMessagesProj/config/release.keystore"
+            SIGN_PASS="telegram123"
+            TARGET_ALIAS="telegramKey"
           fi
 
           APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
@@ -136,7 +141,7 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
 
           "$APKSIGNER" sign \
-            --ks release.jks \
+            --ks "$SIGN_KEY" \
             --ks-key-alias "$TARGET_ALIAS" \
             --ks-pass "pass:$SIGN_PASS" \
             --key-pass "pass:$SIGN_PASS" \
