@@ -1,0 +1,146 @@
+name: Build and Sign Android APK
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Sign APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Expand RAM/Swap so C++ compilation does not crash with OOM
+      - name: Expand Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # 2. Apply all modifications + restrict to arm64-v8a for faster build
+      - name: Apply Telegram Mods & Restrict to arm64-v8a
+        run: |
+          echo "=== 1. Making the App Distinct ==="
+          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
+            's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
+
+          find . -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" | xargs sed -i \
+            's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
+
+          find . -name "AndroidManifest.xml" | xargs sed -i \
+            's/org\.telegram\.messenger\.provider/${applicationId}.provider/g; s/org\.telegram\.messenger\.notification_image_provider/${applicationId}.notification_image_provider/g'
+
+          find . -name "strings.xml" | xargs sed -i -E \
+            's/<string name="AppName">.*<\/string>/<string name="AppName">Telegram Mod<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">Telegram Mod<\/string>/g'
+
+          echo "=== 2. Setting Account Limit to 99 ==="
+          find . -name "UserConfig.java" | xargs sed -i -E \
+            's/(MAX_ACCOUNT_COUNT\s*=\s*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT\s*=\s*)[0-9]+/\199/g'
+
+          find . -name "Defines.h" | xargs sed -i -E \
+            's/(#define\s+MAX_ACCOUNT_COUNT\s+)[0-9]+/\199/g'
+
+          echo "=== 3. Disabling In-App Update Warnings ==="
+          find . -name "SharedConfig.java" | xargs sed -i -E \
+            's/(public static void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
+
+          find . -name "LaunchActivity.java" | xargs sed -i -E \
+            's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
+
+          echo "=== 4. Enforcing arm64-v8a and Memory Tuning ==="
+          # Restrict native ABI compiling strictly to arm64-v8a
+          find . -name "build.gradle" | xargs sed -i -E \
+            's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/g; s/abiFilters\s*=\s*\[[^]]*\]/abiFilters = ["arm64-v8a"]/g'
+
+          # Allocate memory safely to prevent OOM
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
+          echo "org.gradle.workers.max=2" >> gradle.properties
+
+          echo "All modifications applied successfully!"
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # 3. Build only the Standalone APK (Fat/Release) instead of all permutations
+      - name: Build arm64 Release APK
+        run: ./gradlew assembleAfatRelease --no-daemon --stacktrace
+
+      # 4. Auto-sign APK
+      - name: Sign Release APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
+          fi
+
+          KEYSTORE_VALID=false
+          if [ -f release.jks ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            PRIVATE_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
+            if [ -n "$PRIVATE_ALIAS" ]; then
+              echo "Found valid PrivateKeyEntry: $PRIVATE_ALIAS"
+              KEYSTORE_VALID=true
+              TARGET_ALIAS="$PRIVATE_ALIAS"
+              SIGN_PASS="$KEYSTORE_PASSWORD"
+            fi
+          fi
+
+          if [ "$KEYSTORE_VALID" = false ]; then
+            echo "Auto-generating release key in runner..."
+            TARGET_ALIAS="release-key"
+            SIGN_PASS="releasePass123"
+            keytool -genkeypair -v -keystore release.jks \
+              -alias "$TARGET_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$SIGN_PASS" \
+              -keypass "$SIGN_PASS" \
+              -dname "CN=TelegramMod, OU=Dev, O=Personal, L=City, ST=State, C=US"
+          fi
+
+          APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No release APK found!"
+            find . -name "*.apk"
+            exit 1
+          fi
+          echo "Found APK to sign at: $APK_FILE"
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+
+          "$APKSIGNER" sign \
+            --ks release.jks \
+            --ks-key-alias "$TARGET_ALIAS" \
+            --ks-pass "pass:$SIGN_PASS" \
+            --key-pass "pass:$SIGN_PASS" \
+            --out app-arm64-v8a-signed.apk \
+            "$APK_FILE"
+
+          "$APKSIGNER" verify app-arm64-v8a-signed.apk
+          echo "APK signed and verified successfully!"
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-arm64-v8a-release-signed
+          path: app-arm64-v8a-signed.apk
+          if-no-files-found: error
+          retention-days: 14
