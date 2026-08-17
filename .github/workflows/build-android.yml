@@ -33,10 +33,30 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply all Telegram modifications & inject required Gradle release keystore
-      - name: Apply Telegram Mods & Setup Keystore
+      # 2. Generate Release Keystore and Apply All Modifications
+      - name: Setup Keystore & Apply Telegram Mods
         run: |
-          echo "=== 1. Making the App Distinct ==="
+          echo "=== 1. Creating Self-Contained Release Keystore ==="
+          mkdir -p TMessagesProj/config config
+
+          keytool -genkeypair -v \
+            -keystore TMessagesProj/config/release.keystore \
+            -alias "releaseKey" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "releasePass123" \
+            -keypass "releasePass123" \
+            -dname "CN=TelegramMod, OU=Dev, O=Personal, L=City, ST=State, C=US"
+
+          cp TMessagesProj/config/release.keystore config/release.keystore 2>/dev/null || true
+
+          # Inject signing credentials into gradle.properties
+          echo "RELEASE_STORE_PASSWORD=releasePass123" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=releaseKey" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=releasePass123" >> gradle.properties
+
+          echo "=== 2. Making the App Distinct ==="
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
@@ -55,41 +75,19 @@ jobs:
           find . -name "strings.xml" | xargs sed -i -E \
             's/<string name="AppName">.*<\/string>/<string name="AppName">Telegram Mod<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">Telegram Mod<\/string>/g'
 
-          echo "=== 2. Setting Account Limit to 99 ==="
+          echo "=== 3. Setting Account Limit to 99 ==="
           find . -name "UserConfig.java" | xargs sed -i -E \
             's/(MAX_ACCOUNT_COUNT\s*=\s*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT\s*=\s*)[0-9]+/\199/g'
 
           find . -name "Defines.h" | xargs sed -i -E \
             's/(#define\s+MAX_ACCOUNT_COUNT\s+)[0-9]+/\199/g'
 
-          echo "=== 3. Disabling In-App Update Warnings ==="
+          echo "=== 4. Disabling In-App Update Warnings ==="
           find . -name "SharedConfig.java" | xargs sed -i -E \
             's/(public static void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
 
           find . -name "LaunchActivity.java" | xargs sed -i -E \
             's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
-
-          echo "=== 4. Configure Keystore for Gradle Packaging Task ==="
-          # Create the exact keystore directory Telegram's build.gradle looks for
-          mkdir -p TMessagesProj/config config
-
-          keytool -genkeypair -v \
-            -keystore TMessagesProj/config/release.keystore \
-            -alias "telegramKey" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass "telegram123" \
-            -keypass "telegram123" \
-            -dname "CN=Telegram, OU=Dev, O=Telegram, L=Dubai, ST=Dubai, C=AE"
-
-          # Copy to fallback locations
-          cp TMessagesProj/config/release.keystore config/release.keystore 2>/dev/null || true
-
-          # Inject passwords into gradle.properties so Gradle packaging succeeds
-          echo "RELEASE_STORE_PASSWORD=telegram123" >> gradle.properties
-          echo "RELEASE_KEY_ALIAS=telegramKey" >> gradle.properties
-          echo "RELEASE_KEY_PASSWORD=telegram123" >> gradle.properties
 
           echo "=== 5. Configure Compiler Properties ==="
           echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
@@ -97,12 +95,12 @@ jobs:
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
 
-          echo "All modifications and keystore configurations successfully applied!"
+          echo "Setup completed successfully!"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Build arm64 Release APK
+      # 3. Compile the Release APK
       - name: Build arm64 Release APK
         run: |
           ./gradlew assembleAfatRelease \
@@ -112,24 +110,9 @@ jobs:
             -Pandroid.lint.abortOnError=false \
             -Pandroid.lint.checkReleaseBuilds=false
 
-      # 4. Final Sign & Verify with apksigner
+      # 4. Sign and Verify APK
       - name: Sign Release APK
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          # Use provided secret keystore if present, else use generated release keystore
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
-            SIGN_KEY="release.jks"
-            SIGN_PASS="$KEYSTORE_PASSWORD"
-            TARGET_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$SIGN_PASS" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
-          else
-            SIGN_KEY="TMessagesProj/config/release.keystore"
-            SIGN_PASS="telegram123"
-            TARGET_ALIAS="telegramKey"
-          fi
-
           APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: No release APK found!"
@@ -139,18 +122,20 @@ jobs:
           echo "Found APK to sign at: $APK_FILE"
 
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          echo "Using apksigner at: $APKSIGNER"
 
           "$APKSIGNER" sign \
-            --ks "$SIGN_KEY" \
-            --ks-key-alias "$TARGET_ALIAS" \
-            --ks-pass "pass:$SIGN_PASS" \
-            --key-pass "pass:$SIGN_PASS" \
+            --ks TMessagesProj/config/release.keystore \
+            --ks-key-alias "releaseKey" \
+            --ks-pass "pass:releasePass123" \
+            --key-pass "pass:releasePass123" \
             --out app-arm64-v8a-signed.apk \
             "$APK_FILE"
 
           "$APKSIGNER" verify app-arm64-v8a-signed.apk
           echo "APK signed and verified successfully!"
 
+      # 5. Upload Artifact
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
