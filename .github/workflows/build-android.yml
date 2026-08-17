@@ -27,6 +27,46 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      # Step: Automatically apply all modifications in memory
+      - name: Apply Telegram Mods (99 Accounts, Distinct App, No Updates)
+        run: |
+          echo "=== 1. Making the App Distinct ==="
+          # Change Application ID in Gradle
+          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
+            's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
+
+          # Change sync / auth account type
+          find . -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" | xargs sed -i \
+            's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
+
+          # Fix ContentProvider authorities to avoid collisions
+          find . -name "AndroidManifest.xml" | xargs sed -i \
+            's/org\.telegram\.messenger\.provider/${applicationId}.provider/g; s/org\.telegram\.messenger\.notification_image_provider/${applicationId}.notification_image_provider/g'
+
+          # Rename App Display Name
+          find . -name "strings.xml" | xargs sed -i -E \
+            's/<string name="AppName">.*<\/string>/<string name="AppName">Telegram Mod<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">Telegram Mod<\/string>/g'
+
+          echo "=== 2. Setting Account Limit to 99 ==="
+          # Java Account Limits
+          find . -name "UserConfig.java" | xargs sed -i -E \
+            's/(MAX_ACCOUNT_COUNT\s*=\s*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT\s*=\s*)[0-9]+/\199/g'
+
+          # Native C++ tgnet Account Limit
+          find . -name "Defines.h" | xargs sed -i -E \
+            's/(#define\s+MAX_ACCOUNT_COUNT\s+)[0-9]+/\199/g'
+
+          echo "=== 3. Disabling In-App Update Warnings ==="
+          # Disable checkAppUpdate in SharedConfig
+          find . -name "SharedConfig.java" | xargs sed -i -E \
+            's/(public static void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
+
+          # Disable checkAppUpdate in LaunchActivity
+          find . -name "LaunchActivity.java" | xargs sed -i -E \
+            's/(public void checkAppUpdate\([^)]*\)\s*\{)/\1 return;/g'
+
+          echo "All modifications applied successfully!"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
@@ -43,7 +83,7 @@ jobs:
             printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
           fi
 
-          # 2. Check if the keystore has a real PrivateKeyEntry
+          # 2. Check if keystore contains a valid PrivateKeyEntry
           KEYSTORE_VALID=false
           if [ -f release.jks ] && [ -n "$KEYSTORE_PASSWORD" ]; then
             PRIVATE_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
@@ -52,14 +92,12 @@ jobs:
               KEYSTORE_VALID=true
               TARGET_ALIAS="$PRIVATE_ALIAS"
               SIGN_PASS="$KEYSTORE_PASSWORD"
-            else
-              echo "Keystore is missing a PrivateKeyEntry (only contains public certificates)."
             fi
           fi
 
-          # 3. If no valid private key found, auto-generate one on the fly
+          # 3. If invalid or missing, auto-generate release key on the fly
           if [ "$KEYSTORE_VALID" = false ]; then
-            echo "Auto-generating a valid release signing key in CI runner..."
+            echo "Auto-generating release key in runner..."
             TARGET_ALIAS="release-key"
             SIGN_PASS="releasePass123"
             keytool -genkeypair -v -keystore release.jks \
@@ -83,9 +121,8 @@ jobs:
 
           # 5. Locate apksigner in Android SDK
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
-          echo "Using apksigner at: $APKSIGNER"
 
-          # 6. Sign APK
+          # 6. Sign and verify APK
           "$APKSIGNER" sign \
             --ks release.jks \
             --ks-key-alias "$TARGET_ALIAS" \
@@ -94,7 +131,6 @@ jobs:
             --out app-arm64-v8a-signed.apk \
             "$APK_FILE"
 
-          # 7. Verify signature
           "$APKSIGNER" verify app-arm64-v8a-signed.apk
           echo "APK signed and verified successfully!"
 
