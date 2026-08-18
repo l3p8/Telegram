@@ -67,9 +67,9 @@ jobs:
 
           # Update APP_PACKAGE in gradle.properties (Critical for Telegram)
           if grep -q "APP_PACKAGE=" gradle.properties 2>/dev/null; then
-            sed -i 's/APP_PACKAGE=.*/APP_PACKAGE="org.telegram.messenger.mod"/g' gradle.properties
+            sed -i 's/APP_PACKAGE=.*/APP_PACKAGE=org.telegram.messenger.mod/g' gradle.properties
           else
-            echo 'APP_PACKAGE="org.telegram.messenger.mod"' >> gradle.properties
+            echo 'APP_PACKAGE=org.telegram.messenger.mod' >> gradle.properties
           fi
 
           # Disable Google Services plugin to prevent package name mismatch errors
