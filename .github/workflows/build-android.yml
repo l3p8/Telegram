@@ -103,20 +103,6 @@ jobs:
           find . -name "Defines.h" -print0 | xargs -0 -r sed -i -E \
             's/(#define[[:space:]]+MAX_ACCOUNT_COUNT[[:space:]]+)[0-9]+/\199/g'
 
-          echo "=== 3. Disable in-app update warnings ==="
-          UPDATE_FILES="$(grep -ril --include='*.java' -e 'checkAppUpdate' -e 'isAppUpdateAvailable' . || true)"
-          if [ -n "$UPDATE_FILES" ]; then
-            printf '%s\n' "$UPDATE_FILES" | xargs -r sed -i -E \
-              's/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?void[[:space:]]+checkAppUpdate[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return;/g; s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?boolean[[:space:]]+isAppUpdateAvailable[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return false;/g'
-          fi
-
-          echo "=== 3.1 Block sponsored messages / ads ==="
-          SPONSORED_FILES="$(grep -ril --include='*.java' 'sponsored' . || true)"
-          if [ -n "$SPONSORED_FILES" ]; then
-            printf '%s\n' "$SPONSORED_FILES" | xargs -r sed -i -E \
-              's/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?void[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return;/g; s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?boolean[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return false;/g'
-          fi
-
           find . \( -name "SharedConfig.java" -o -name "UserConfig.java" \) -print0 | xargs -0 -r sed -i -E \
             's/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?boolean[[:space:]]+(is|has)Premium[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return true;/g'
 
