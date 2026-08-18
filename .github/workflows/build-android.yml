@@ -60,7 +60,6 @@ jobs:
           esac
 
           echo "=== 1. Make app distinct and rename to TG ==="
-
           find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i -E \
             "s/(applicationId[[:space:]]*(=[[:space:]]*)?[\"'])org\.telegram\.messenger(\.web|\.beta)?([\"'])/\1org.telegram.messenger.mod\4/g"
 
@@ -83,7 +82,6 @@ jobs:
             "s/<string name=\"AppName\">.*<\/string>/<string name=\"AppName\">TG<\/string>/g; s/<string name=\"AppNameBeta\">.*<\/string>/<string name=\"AppNameBeta\">TG<\/string>/g"
 
           echo "=== 2. Set account limit to 99 ==="
-
           find . -name "UserConfig.java" -print0 | xargs -0 -r sed -i -E \
             "s/(MAX_ACCOUNT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g"
 
@@ -91,7 +89,6 @@ jobs:
             "s/(#define[[:space:]]+MAX_ACCOUNT_COUNT[[:space:]]+)[0-9]+/\199/g"
 
           echo "=== 3. Disable in-app update warnings ==="
-
           UPDATE_FILES="$(grep -ril --include='*.java' -e 'checkAppUpdate' -e 'isAppUpdateAvailable' . || true)"
           if [ -n "$UPDATE_FILES" ]; then
             printf '%s\n' "$UPDATE_FILES" | xargs -r sed -i -E \
@@ -99,19 +96,20 @@ jobs:
           fi
 
           echo "=== 3.1 Block sponsored messages / ads ==="
-
           SPONSORED_FILES="$(grep -ril --include='*.java' 'sponsored' . || true)"
           if [ -n "$SPONSORED_FILES" ]; then
             printf '%s\n' "$SPONSORED_FILES" | xargs -r sed -i -E \
               "s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?void[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return;/g; s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?boolean[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return false;/g"
           fi
 
-          # Local fake Premium helps hide official sponsored messages.
           find . \( -name "SharedConfig.java" -o -name "UserConfig.java" \) -print0 | xargs -0 -r sed -i -E \
             "s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?boolean[[:space:]]+(is|has)Premium[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return true;/g"
 
-          echo "=== 4. Configure keystore ==="
+          echo "=== 4. Restrict NDK to arm64-v8a only (Massive speedup) ==="
+          find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i -E \
+            's/"armeabi-v7a"[[:space:]]*,[[:space:]]*"arm64-v8a"[[:space:]]*,[[:space:]]*"x86"[[:space:]]*,[[:space:]]*"x86_64"/"arm64-v8a"/g; s/"armeabi-v7a","arm64-v8a","x86","x86_64"/"arm64-v8a"/g'
 
+          echo "=== 5. Configure keystore ==="
           mkdir -p TMessagesProj/config config
           rm -f TMessagesProj/config/release.keystore config/release.keystore release.jks
 
@@ -119,14 +117,12 @@ jobs:
 
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks 2>/dev/null || true
-
             CUSTOM_ALIAS="$KEY_ALIAS"
 
             if [ -f release.jks ] && keytool -list -keystore release.jks -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
               if [ -z "$CUSTOM_ALIAS" ]; then
                 CUSTOM_ALIAS="$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | awk -F': ' '/Alias name:/{alias=$2} /PrivateKeyEntry/{if (alias != "") {print alias; exit}}' | tr -d '\r')"
               fi
-
               if [ -z "$CUSTOM_ALIAS" ]; then
                 CUSTOM_ALIAS="$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | awk -F': ' '/Alias name:/{print $2; exit}' | tr -d '\r')"
               fi
@@ -137,11 +133,7 @@ jobs:
                 KEY_ALIAS="$CUSTOM_ALIAS"
                 USE_CUSTOM_KEYSTORE=true
                 echo "Using custom keystore from KEYSTORE_BASE64."
-              else
-                echo "Custom keystore has no usable alias. Falling back to generated keystore."
               fi
-            else
-              echo "Custom keystore is invalid. Falling back to generated keystore."
             fi
           fi
 
@@ -152,23 +144,15 @@ jobs:
 
             keytool -genkeypair -v \
               -keystore TMessagesProj/config/release.keystore \
-              -alias "$KEY_ALIAS" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$KEYSTORE_PASSWORD" \
-              -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
               -dname "CN=TG, OU=Dev, O=TG, L=Dubai, ST=Dubai, C=AE"
 
             cp TMessagesProj/config/release.keystore config/release.keystore
             cp TMessagesProj/config/release.keystore release.jks
-
-            echo "Generated fallback keystore."
           fi
 
-          if [ -z "$KEY_PASSWORD" ]; then
-            KEY_PASSWORD="$KEYSTORE_PASSWORD"
-          fi
+          if [ -z "$KEY_PASSWORD" ]; then KEY_PASSWORD="$KEYSTORE_PASSWORD"; fi
 
           touch gradle.properties
           sed -i -E '/^(RELEASE_STORE_PASSWORD|RELEASE_KEY_ALIAS|RELEASE_KEY_PASSWORD|android\.injected\.build\.abi|android\.enableR8\.fullMode|org\.gradle\.jvmargs|org\.gradle\.workers\.max)=/d' gradle.properties
@@ -176,10 +160,6 @@ jobs:
           echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> gradle.properties
           echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> gradle.properties
           echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> gradle.properties
-
-          echo "=== 5. Configure compiler properties ==="
-
-          echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
           echo "android.enableR8.fullMode=false" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
@@ -199,43 +179,25 @@ jobs:
             --no-daemon \
             --console=plain \
             --stacktrace \
-            -Pandroid.injected.build.abi=arm64-v8a \
             -Pandroid.lint.abortOnError=false \
             -Pandroid.lint.checkReleaseBuilds=false
 
       - name: Sign Release APK
         run: |
           set -e
-
           SIGN_KEY="TMessagesProj/config/release.keystore"
-          if [ ! -f "$SIGN_KEY" ]; then
-            SIGN_KEY="release.jks"
-          fi
-
-          echo "Searching for generated APK files..."
-          find . -type f -name "*.apk"
+          [ ! -f "$SIGN_KEY" ] && SIGN_KEY="release.jks"
 
           APK_FILE="$(find . -type f -name "*.apk" | grep -E -i 'release|afat' | grep -v -i 'unaligned' | head -n 1 || true)"
+          [ -z "$APK_FILE" ] && APK_FILE="$(find . -type f -name "*.apk" | head -n 1 || true)"
 
           if [ -z "$APK_FILE" ]; then
-            APK_FILE="$(find . -type f -name "*.apk" | head -n 1 || true)"
-          fi
-
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: No APK found anywhere in workspace."
-            find . -path "*/build/outputs/*" || true
+            echo "ERROR: No APK found."
             exit 1
           fi
-
-          echo "Selected APK to sign: $APK_FILE"
 
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           APKSIGNER="$(find "$SDK_ROOT/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)"
-
-          if [ -z "$APKSIGNER" ]; then
-            echo "ERROR: apksigner not found."
-            exit 1
-          fi
 
           "$APKSIGNER" sign \
             --ks "$SIGN_KEY" \
@@ -246,7 +208,6 @@ jobs:
             "$APK_FILE"
 
           "$APKSIGNER" verify TG-arm64-v8a-signed.apk
-
           echo "APK signed and verified successfully."
 
       - name: Upload Signed APK
