@@ -1,4 +1,4 @@
-name: Build and Sign Android APK
+name: Build and Sign TG Android APK
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
 
 jobs:
   build:
-    name: Build and Sign APK
+    name: Build and Sign TG APK
     runs-on: ubuntu-latest
 
     steps:
@@ -33,27 +33,32 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply Telegram modifications & setup build properties
-      - name: Apply Telegram Mods & Setup Keystore
+      # 2. Apply modifications: Distinct App, Rename to TG, 99 Accounts, Disable Updates
+      - name: Apply TG Mods & Setup Keystore
         run: |
-          echo "=== 1. Making the App Distinct ==="
+          echo "=== 1. Making the App Distinct & Renaming to TG ==="
+          # Update Application ID in Gradle
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
-          find . -name "google-services.json" | xargs sed -i -E \
-            's/"package_name":\s*"[^"]*"/"package_name": "org.telegram.messenger.mod"/g'
+          # Fix google-services.json cleanly without creating duplicate client IDs
+          find . -name "google-services.json" | xargs sed -i \
+            's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
 
           find . -name "BuildVars.java" | xargs sed -i \
             's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
 
+          # Update system sync / auth accounts (avoids system account collisions)
           find . -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" | xargs sed -i \
             's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
 
+          # Fix ContentProvider authorities
           find . -name "AndroidManifest.xml" | xargs sed -i \
             's/org\.telegram\.messenger\.provider/${applicationId}.provider/g; s/org\.telegram\.messenger\.notification_image_provider/${applicationId}.notification_image_provider/g'
 
+          # Rename App Display Name to "TG" across all resource files
           find . -name "strings.xml" | xargs sed -i -E \
-            's/<string name="AppName">.*<\/string>/<string name="AppName">Telegram Mod<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">Telegram Mod<\/string>/g'
+            's/<string name="AppName">.*<\/string>/<string name="AppName">TG<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">TG<\/string>/g'
 
           echo "=== 2. Setting Account Limit to 99 ==="
           find . -name "UserConfig.java" | xargs sed -i -E \
@@ -82,7 +87,7 @@ jobs:
             -validity 10000 \
             -storepass "telegram123" \
             -keypass "telegram123" \
-            -dname "CN=Telegram, OU=Dev, O=Telegram, L=Dubai, ST=Dubai, C=AE"
+            -dname "CN=TG, OU=Dev, O=TG, L=Dubai, ST=Dubai, C=AE"
 
           cp TMessagesProj/config/release.keystore config/release.keystore 2>/dev/null || true
 
@@ -96,7 +101,7 @@ jobs:
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
 
-          echo "All modifications and keystore configurations successfully applied!"
+          echo "All modifications successfully applied!"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -110,15 +115,9 @@ jobs:
             --stacktrace \
             -Pandroid.injected.build.abi=arm64-v8a \
             -Pandroid.lint.abortOnError=false \
-            -Pandroid.lint.checkReleaseBuilds=false 2>&1 | tee build.log || {
-              echo ""
-              echo "==================== BUILD FAILED - EXACT ERROR ===================="
-              grep -E -B 2 -A 10 "(error:|Execution failed for task|FAILURE: Build failed)" build.log | head -n 40
-              echo "===================================================================="
-              exit 1
-            }
+            -Pandroid.lint.checkReleaseBuilds=false
 
-      # 4. Safe Sign & Verify with apksigner (Robust APK Locator)
+      # 4. Safe Sign & Verify with apksigner
       - name: Sign Release APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -145,10 +144,9 @@ jobs:
             TARGET_ALIAS="telegramKey"
           fi
 
-          echo "Searching for all generated APK files..."
+          echo "Searching for generated APK files..."
           find . -type f -name "*.apk"
 
-          # Auto-select the release APK
           APK_FILE=$(find . -type f -name "*.apk" | grep -E -i "release|afat" | grep -v -i "unaligned" | head -n 1)
 
           if [ -z "$APK_FILE" ]; then
@@ -161,7 +159,7 @@ jobs:
             exit 1
           fi
 
-          echo "Found APK to sign at: $APK_FILE"
+          echo "Selected APK to sign: $APK_FILE"
 
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
 
@@ -170,17 +168,17 @@ jobs:
             --ks-key-alias "$TARGET_ALIAS" \
             --ks-pass "pass:$SIGN_PASS" \
             --key-pass "pass:$SIGN_PASS" \
-            --out app-arm64-v8a-signed.apk \
+            --out TG-arm64-v8a-signed.apk \
             "$APK_FILE"
 
-          "$APKSIGNER" verify app-arm64-v8a-signed.apk
+          "$APKSIGNER" verify TG-arm64-v8a-signed.apk
           echo "APK signed and verified successfully!"
 
       # 5. Upload Signed APK Artifact
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-arm64-v8a-release-signed
-          path: app-arm64-v8a-signed.apk
+          name: TG-arm64-v8a-release-signed
+          path: TG-arm64-v8a-signed.apk
           if-no-files-found: error
           retention-days: 14
