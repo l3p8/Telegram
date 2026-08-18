@@ -11,21 +11,14 @@ on:
       - main
   workflow_dispatch:
 
-concurrency:
-  group: tg-android-build-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     name: Build and Sign TG APK
     runs-on: ubuntu-latest
-    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Expand Swap Space
         uses: pierotofy/set-swap-space@master
@@ -35,135 +28,165 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-          cache: 'gradle'
+          cache: gradle
 
-      - name: Accept Android SDK licenses
-        run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-      - name: Apply TG Mods & Setup Keystore
+      - name: Apply TG Mods, Ads Block & Keystore
         env:
-          API_ID: ${{ secrets.API_ID }}
-          API_HASH: ${{ secrets.API_HASH }}
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_HASH: ${{ secrets.APP_HASH }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          set -euo pipefail
+          set -e
 
-          if [ -z "${API_ID:-}" ] || [ -z "${API_HASH:-}" ]; then
-            echo "ERROR: Set API_ID and API_HASH repository secrets."
+          APP_ID="$(printf '%s' "$APP_ID" | tr -d '\r\n ')"
+          APP_HASH="$(printf '%s' "$APP_HASH" | tr -d '\r\n ')"
+          KEY_ALIAS="$(printf '%s' "$KEY_ALIAS" | tr -d '\r\n')"
+
+          if [ -z "$APP_ID" ] || [ -z "$APP_HASH" ]; then
+            echo "ERROR: Set APP_ID and APP_HASH repository secrets."
             exit 1
           fi
 
-          if ! [[ "$API_ID" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: API_ID must be numeric."
-            exit 1
-          fi
+          case "$APP_ID" in
+            ''|*[!0-9]*)
+              echo "ERROR: APP_ID must be numeric."
+              exit 1
+              ;;
+          esac
 
           echo "=== 1. Make app distinct and rename to TG ==="
 
-          # Change applicationId
           find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i -E \
-            "s/(applicationId[[:space:]]*=?[[:space:]]*)[\"']org\.telegram\.messenger(\.web|\.beta)?[\"']/\1\"org.telegram.messenger.mod\"/g"
+            "s/(applicationId[[:space:]]*(=[[:space:]]*)?[\"'])org\.telegram\.messenger(\.web|\.beta)?([\"'])/\1org.telegram.messenger.mod\4/g"
 
-          # Update Firebase / Google Services package name
-          find . -name "google-services.json" -print0 | xargs -0 -r sed -i \
-            's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
+          find . -name "google-services.json" -print0 | xargs -0 -r sed -i -E \
+            "s/org\.telegram\.messenger(\.web|\.beta)?/org.telegram.messenger.mod/g"
 
-          # Inject Telegram API credentials into BuildVars.java
           find . -name "BuildVars.java" -print0 | xargs -0 -r sed -i -E \
-            "s/(public[[:space:]]+static[[:space:]]+(final[[:space:]]+)?int[[:space:]]+(API_ID|APP_ID)[[:space:]]*=[[:space:]]*)[0-9]+/\1${API_ID}/g; s/(public[[:space:]]+static[[:space:]]+(final[[:space:]]+)?String[[:space:]]+(API_HASH|APP_HASH)[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"${API_HASH}\"/g"
+            "s/(public[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?int[[:space:]]+(API_ID|APP_ID)[[:space:]]*=[[:space:]]*)[0-9]+/\1${APP_ID}/g; s/(public[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?String[[:space:]]+(API_HASH|APP_HASH)[[:space:]]*=[[:space:]]*\")[^\"]*/\1${APP_HASH}/g"
 
-          # Replace hardcoded package strings in BuildVars.java
-          find . -name "BuildVars.java" -print0 | xargs -0 -r sed -i \
-            's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
+          find . -name "BuildVars.java" -print0 | xargs -0 -r sed -i -E \
+            "s/\"org\.telegram\.messenger(\.web|\.beta)?\"/\"org.telegram.messenger.mod\"/g"
 
-          # Make Android system account types distinct
           find . \( -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" \) -print0 | xargs -0 -r sed -i \
-            's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
+            "s/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g"
 
-          # Replace ContentProvider authorities with applicationId placeholders
-          find . -name "AndroidManifest.xml" -print0 | xargs -0 -r sed -i -E \
-            's/android:authorities="org\.telegram\.messenger\.([^"]*)"/android:authorities="${applicationId}.\1"/g'
+          find . -name "AndroidManifest.xml" -print0 | xargs -0 -r sed -i \
+            's/org\.telegram\.messenger\.provider/${applicationId}.provider/g; s/org\.telegram\.messenger\.notification_image_provider/${applicationId}.notification_image_provider/g'
 
-          # Rename app display name to TG
           find . -name "strings.xml" -print0 | xargs -0 -r sed -i -E \
-            's/<string name="AppName">.*<\/string>/<string name="AppName">TG<\/string>/g; s/<string name="AppNameBeta">.*<\/string>/<string name="AppNameBeta">TG<\/string>/g'
+            "s/<string name=\"AppName\">.*<\/string>/<string name=\"AppName\">TG<\/string>/g; s/<string name=\"AppNameBeta\">.*<\/string>/<string name=\"AppNameBeta\">TG<\/string>/g"
 
           echo "=== 2. Set account limit to 99 ==="
 
           find . -name "UserConfig.java" -print0 | xargs -0 -r sed -i -E \
-            's/(MAX_ACCOUNT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g'
+            "s/(MAX_ACCOUNT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g; s/(MAX_ACCOUNT_DEFAULT_COUNT[[:space:]]*=[[:space:]]*)[0-9]+/\199/g"
 
           find . -name "Defines.h" -print0 | xargs -0 -r sed -i -E \
-            's/(#define[[:space:]]+MAX_ACCOUNT_COUNT[[:space:]]+)[0-9]+/\199/g'
+            "s/(#define[[:space:]]+MAX_ACCOUNT_COUNT[[:space:]]+)[0-9]+/\199/g"
 
           echo "=== 3. Disable in-app update warnings ==="
 
-          if grep -ril --include="*.java" "checkAppUpdate" . >/dev/null 2>&1; then
-            grep -rilZ --include="*.java" "checkAppUpdate" . | xargs -0 -r sed -i -E \
-              's/(void[[:space:]]+checkAppUpdate[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return;/g'
+          UPDATE_FILES="$(grep -ril --include='*.java' -e 'checkAppUpdate' -e 'isAppUpdateAvailable' . || true)"
+          if [ -n "$UPDATE_FILES" ]; then
+            printf '%s\n' "$UPDATE_FILES" | xargs -r sed -i -E \
+              "s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?void[[:space:]]+checkAppUpdate[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return;/g; s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?boolean[[:space:]]+isAppUpdateAvailable[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return false;/g"
           fi
 
-          find . -name "SharedConfig.java" -print0 | xargs -0 -r sed -i -E \
-            's/(boolean[[:space:]]+isAppUpdateAvailable[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return false;/g; s/(boolean[[:space:]]+setNewAppVersionAvailable[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return false;/g'
+          echo "=== 3.1 Block sponsored messages / ads ==="
 
-          echo "=== 3.1 Block Sponsored Messages / Ads ==="
-
-          # Disable sponsored-message related void loaders/handlers
-          if grep -ril --include="*.java" "sponsored" . >/dev/null 2>&1; then
-            grep -rilZ --include="*.java" "sponsored" . | xargs -0 -r sed -i -E \
-              's/(void[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return;/g; s/(boolean[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return false;/g'
+          SPONSORED_FILES="$(grep -ril --include='*.java' 'sponsored' . || true)"
+          if [ -n "$SPONSORED_FILES" ]; then
+            printf '%s\n' "$SPONSORED_FILES" | xargs -r sed -i -E \
+              "s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?void[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return;/g; s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?(synchronized[[:space:]]+)?boolean[[:space:]]+[A-Za-z0-9_]*[Ss]ponsored[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return false;/g"
           fi
 
-          # Fake local Premium status to stop official sponsored-message path
+          # Local fake Premium helps hide official sponsored messages.
           find . \( -name "SharedConfig.java" -o -name "UserConfig.java" \) -print0 | xargs -0 -r sed -i -E \
-            's/(boolean[[:space:]]+(is|has)[Pp]remium[A-Za-z0-9_]*[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if (Math.random() >= 0) return true;/g'
+            "s/((public|private|protected)[[:space:]]+(static[[:space:]]+)?(final[[:space:]]+)?boolean[[:space:]]+(is|has)Premium[[:space:]]*\([^)]*\)[[:space:]]*\{)/\1 if(Math.random()>=0) return true;/g"
 
           echo "=== 4. Configure keystore ==="
 
           mkdir -p TMessagesProj/config config
           rm -f TMessagesProj/config/release.keystore config/release.keystore release.jks
 
-          keytool -genkeypair -v \
-            -keystore TMessagesProj/config/release.keystore \
-            -alias "telegramKey" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass "telegram123" \
-            -keypass "telegram123" \
-            -dname "CN=TG, OU=Dev, O=TG, L=Dubai, ST=Dubai, C=AE"
+          USE_CUSTOM_KEYSTORE=false
 
-          cp TMessagesProj/config/release.keystore config/release.keystore 2>/dev/null || true
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks 2>/dev/null || true
 
-          if [ -f gradle.properties ]; then
-            sed -i \
-              -e '/^[[:space:]]*RELEASE_STORE_PASSWORD=/d' \
-              -e '/^[[:space:]]*RELEASE_KEY_ALIAS=/d' \
-              -e '/^[[:space:]]*RELEASE_KEY_PASSWORD=/d' \
-              -e '/^[[:space:]]*android\.injected\.build\.abi=/d' \
-              -e '/^[[:space:]]*android\.enableR8\.fullMode=/d' \
-              -e '/^[[:space:]]*android\.defaults\.buildfeatures\.buildconfig=/d' \
-              -e '/^[[:space:]]*android\.native\.buildParallelism=/d' \
-              -e '/^[[:space:]]*org\.gradle\.jvmargs=/d' \
-              -e '/^[[:space:]]*org\.gradle\.workers\.max=/d' \
-              -e '/^[[:space:]]*org\.gradle\.configuration-cache=/d' \
-              gradle.properties
+            CUSTOM_ALIAS="$KEY_ALIAS"
+
+            if [ -f release.jks ] && keytool -list -keystore release.jks -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+              if [ -z "$CUSTOM_ALIAS" ]; then
+                CUSTOM_ALIAS="$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | awk -F': ' '/Alias name:/{alias=$2} /PrivateKeyEntry/{if (alias != "") {print alias; exit}}' | tr -d '\r')"
+              fi
+
+              if [ -z "$CUSTOM_ALIAS" ]; then
+                CUSTOM_ALIAS="$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | awk -F': ' '/Alias name:/{print $2; exit}' | tr -d '\r')"
+              fi
+
+              if [ -n "$CUSTOM_ALIAS" ]; then
+                cp release.jks TMessagesProj/config/release.keystore
+                cp release.jks config/release.keystore
+                KEY_ALIAS="$CUSTOM_ALIAS"
+                USE_CUSTOM_KEYSTORE=true
+                echo "Using custom keystore from KEYSTORE_BASE64."
+              else
+                echo "Custom keystore has no usable alias. Falling back to generated keystore."
+              fi
+            else
+              echo "Custom keystore is invalid. Falling back to generated keystore."
+            fi
           fi
 
-          {
-            echo "RELEASE_STORE_PASSWORD=telegram123"
-            echo "RELEASE_KEY_ALIAS=telegramKey"
-            echo "RELEASE_KEY_PASSWORD=telegram123"
-            echo "android.injected.build.abi=arm64-v8a"
-            echo "android.enableR8.fullMode=false"
-            echo "android.defaults.buildfeatures.buildconfig=true"
-            echo "android.native.buildParallelism=2"
-            echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m"
-            echo "org.gradle.workers.max=2"
-            echo "org.gradle.configuration-cache=false"
-          } >> gradle.properties
+          if [ "$USE_CUSTOM_KEYSTORE" = false ]; then
+            KEYSTORE_PASSWORD="telegram123"
+            KEY_ALIAS="telegramKey"
+            KEY_PASSWORD="telegram123"
+
+            keytool -genkeypair -v \
+              -keystore TMessagesProj/config/release.keystore \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$KEYSTORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -dname "CN=TG, OU=Dev, O=TG, L=Dubai, ST=Dubai, C=AE"
+
+            cp TMessagesProj/config/release.keystore config/release.keystore
+            cp TMessagesProj/config/release.keystore release.jks
+
+            echo "Generated fallback keystore."
+          fi
+
+          if [ -z "$KEY_PASSWORD" ]; then
+            KEY_PASSWORD="$KEYSTORE_PASSWORD"
+          fi
+
+          touch gradle.properties
+          sed -i -E '/^(RELEASE_STORE_PASSWORD|RELEASE_KEY_ALIAS|RELEASE_KEY_PASSWORD|android\.injected\.build\.abi|android\.enableR8\.fullMode|org\.gradle\.jvmargs|org\.gradle\.workers\.max)=/d' gradle.properties
+
+          echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> gradle.properties
+
+          echo "=== 5. Configure compiler properties ==="
+
+          echo "android.injected.build.abi=arm64-v8a" >> gradle.properties
+          echo "android.enableR8.fullMode=false" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
+          echo "org.gradle.workers.max=2" >> gradle.properties
+
+          echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
 
           echo "All modifications successfully applied."
 
@@ -171,8 +194,6 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build arm64 Release APK
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: "2"
         run: |
           ./gradlew assembleAfatRelease \
             --no-daemon \
@@ -183,53 +204,21 @@ jobs:
             -Pandroid.lint.checkReleaseBuilds=false
 
       - name: Sign Release APK
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          USE_CUSTOM=false
-          rm -f TG-arm64-v8a-signed.apk
+          set -e
 
-          if [ -n "${KEYSTORE_BASE64:-}" ] && [ -n "${KEYSTORE_PASSWORD:-}" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks 2>/dev/null || true
-
-            if [ -f release.jks ] && keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
-              TARGET_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n' || true)
-
-              if [ -n "$TARGET_ALIAS" ]; then
-                echo "Custom secret keystore validated successfully."
-                SIGN_KEY="release.jks"
-                SIGN_PASS="$KEYSTORE_PASSWORD"
-                USE_CUSTOM=true
-              else
-                echo "Custom keystore has no usable private key alias. Falling back."
-              fi
-            else
-              echo "Secret KEYSTORE_BASE64 is invalid. Falling back to generated keystore."
-            fi
-          fi
-
-          if [ "$USE_CUSTOM" = false ]; then
-            SIGN_KEY="TMessagesProj/config/release.keystore"
-            SIGN_PASS="telegram123"
-            TARGET_ALIAS="telegramKey"
+          SIGN_KEY="TMessagesProj/config/release.keystore"
+          if [ ! -f "$SIGN_KEY" ]; then
+            SIGN_KEY="release.jks"
           fi
 
           echo "Searching for generated APK files..."
-          find . -type f -name "*.apk" || true
+          find . -type f -name "*.apk"
 
-          APK_FILE=$(find TMessagesProj/build/outputs/apk -type f -name "*.apk" 2>/dev/null | grep -E -i "arm64-v8a" | grep -v -i "unaligned" | head -n 1 || true)
-
-          if [ -z "$APK_FILE" ]; then
-            APK_FILE=$(find TMessagesProj/build/outputs/apk -type f -name "*.apk" 2>/dev/null | grep -E -i "release|afat" | grep -v -i "unaligned" | head -n 1 || true)
-          fi
+          APK_FILE="$(find . -type f -name "*.apk" | grep -E -i 'release|afat' | grep -v -i 'unaligned' | head -n 1 || true)"
 
           if [ -z "$APK_FILE" ]; then
-            APK_FILE=$(find . -path "*/build/outputs/apk/*" -type f -name "*.apk" 2>/dev/null | head -n 1 || true)
-          fi
-
-          if [ -z "$APK_FILE" ]; then
-            APK_FILE=$(find . -type f -name "*.apk" 2>/dev/null | head -n 1 || true)
+            APK_FILE="$(find . -type f -name "*.apk" | head -n 1 || true)"
           fi
 
           if [ -z "$APK_FILE" ]; then
@@ -240,7 +229,8 @@ jobs:
 
           echo "Selected APK to sign: $APK_FILE"
 
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)"
 
           if [ -z "$APKSIGNER" ]; then
             echo "ERROR: apksigner not found."
@@ -249,13 +239,14 @@ jobs:
 
           "$APKSIGNER" sign \
             --ks "$SIGN_KEY" \
-            --ks-key-alias "$TARGET_ALIAS" \
-            --ks-pass "pass:$SIGN_PASS" \
-            --key-pass "pass:$SIGN_PASS" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --key-pass "pass:$KEY_PASSWORD" \
             --out TG-arm64-v8a-signed.apk \
             "$APK_FILE"
 
           "$APKSIGNER" verify TG-arm64-v8a-signed.apk
+
           echo "APK signed and verified successfully."
 
       - name: Upload Signed APK
