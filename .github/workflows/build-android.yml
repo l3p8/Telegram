@@ -33,15 +33,13 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply all Telegram modifications & setup build properties
+      # 2. Apply Telegram modifications & setup build properties
       - name: Apply Telegram Mods & Setup Keystore
         run: |
           echo "=== 1. Making the App Distinct ==="
-          # Update Application ID across Gradle files
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
-          # Update all package_name entries in google-services.json
           find . -name "google-services.json" | xargs sed -i -E \
             's/"package_name":\s*"[^"]*"/"package_name": "org.telegram.messenger.mod"/g'
 
@@ -74,10 +72,8 @@ jobs:
           echo "=== 4. Configure Keystore for Gradle Packaging Task ==="
           mkdir -p TMessagesProj/config config
           
-          # Delete any pre-existing keystores to prevent password mismatch
           rm -f TMessagesProj/config/release.keystore config/release.keystore release.jks
 
-          # Generate clean release keystore
           keytool -genkeypair -v \
             -keystore TMessagesProj/config/release.keystore \
             -alias "telegramKey" \
@@ -105,7 +101,7 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Build arm64 Release APK with plain console & error capture
+      # 3. Build arm64 Release APK
       - name: Build arm64 Release APK
         run: |
           ./gradlew assembleAfatRelease \
@@ -122,7 +118,7 @@ jobs:
               exit 1
             }
 
-      # 4. Safe Sign & Verify with apksigner
+      # 4. Safe Sign & Verify with apksigner (Robust APK Locator)
       - name: Sign Release APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -149,12 +145,22 @@ jobs:
             TARGET_ALIAS="telegramKey"
           fi
 
-          APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
+          echo "Searching for all generated APK files..."
+          find . -type f -name "*.apk"
+
+          # Auto-select the release APK
+          APK_FILE=$(find . -type f -name "*.apk" | grep -E -i "release|afat" | grep -v -i "unaligned" | head -n 1)
+
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: No release APK found!"
-            find . -name "*.apk"
+            APK_FILE=$(find . -type f -name "*.apk" | head -n 1)
+          fi
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No APK found anywhere in workspace!"
+            find . -path "*/build/outputs/*" || true
             exit 1
           fi
+
           echo "Found APK to sign at: $APK_FILE"
 
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
@@ -170,6 +176,7 @@ jobs:
           "$APKSIGNER" verify app-arm64-v8a-signed.apk
           echo "APK signed and verified successfully!"
 
+      # 5. Upload Signed APK Artifact
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
