@@ -63,6 +63,17 @@ jobs:
           find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i -E \
             "s/(applicationId[[:space:]]*(=[[:space:]]*)?[\"'])org\.telegram\.messenger(\.web|\.beta)?([\"'])/\1org.telegram.messenger.mod\4/g"
 
+          # Update APP_PACKAGE in gradle.properties (Critical for Telegram)
+          if grep -q "APP_PACKAGE=" gradle.properties 2>/dev/null; then
+            sed -i 's/APP_PACKAGE=.*/APP_PACKAGE="org.telegram.messenger.mod"/g' gradle.properties
+          else
+            echo 'APP_PACKAGE="org.telegram.messenger.mod"' >> gradle.properties
+          fi
+
+          # Disable Google Services plugin to prevent package name mismatch errors
+          find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i -E \
+            "s/(apply[[:space:]]+plugin:[[:space:]]*['\"])com\.google\.gms\.google-services(['\"])/\/\/ \1\2/g"
+
           find . -name "google-services.json" -print0 | xargs -0 -r sed -i -E \
             "s/org\.telegram\.messenger(\.web|\.beta)?/org.telegram.messenger.mod/g"
 
@@ -179,8 +190,16 @@ jobs:
             --no-daemon \
             --console=plain \
             --stacktrace \
+            --info \
             -Pandroid.lint.abortOnError=false \
-            -Pandroid.lint.checkReleaseBuilds=false
+            -Pandroid.lint.checkReleaseBuilds=false 2>&1 | tee build.log
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Sign Release APK
         run: |
