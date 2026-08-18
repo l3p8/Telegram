@@ -33,15 +33,17 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 2. Apply all Telegram modifications & inject required Gradle release keystore
+      # 2. Apply all Telegram modifications & setup build properties
       - name: Apply Telegram Mods & Setup Keystore
         run: |
           echo "=== 1. Making the App Distinct ==="
+          # Update Application ID across Gradle files
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i -E \
             's/applicationId\s+["'"'"']org\.telegram\.messenger(\.web|\.beta)?["'"'"']/applicationId "org.telegram.messenger.mod"/g'
 
-          find . -name "google-services.json" | xargs sed -i \
-            's/"package_name": "org\.telegram\.messenger"/"package_name": "org.telegram.messenger.mod"/g'
+          # Update all package_name entries in google-services.json
+          find . -name "google-services.json" | xargs sed -i -E \
+            's/"package_name":\s*"[^"]*"/"package_name": "org.telegram.messenger.mod"/g'
 
           find . -name "BuildVars.java" | xargs sed -i \
             's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
@@ -75,7 +77,7 @@ jobs:
           # Delete any pre-existing keystores to prevent password mismatch
           rm -f TMessagesProj/config/release.keystore config/release.keystore release.jks
 
-          # Generate a fresh release keystore
+          # Generate clean release keystore
           keytool -genkeypair -v \
             -keystore TMessagesProj/config/release.keystore \
             -alias "telegramKey" \
@@ -103,15 +105,22 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 3. Build arm64 Release APK
+      # 3. Build arm64 Release APK with plain console & error capture
       - name: Build arm64 Release APK
         run: |
           ./gradlew assembleAfatRelease \
             --no-daemon \
+            --console=plain \
             --stacktrace \
             -Pandroid.injected.build.abi=arm64-v8a \
             -Pandroid.lint.abortOnError=false \
-            -Pandroid.lint.checkReleaseBuilds=false
+            -Pandroid.lint.checkReleaseBuilds=false 2>&1 | tee build.log || {
+              echo ""
+              echo "==================== BUILD FAILED - EXACT ERROR ===================="
+              grep -E -B 2 -A 10 "(error:|Execution failed for task|FAILURE: Build failed)" build.log | head -n 40
+              echo "===================================================================="
+              exit 1
+            }
 
       # 4. Safe Sign & Verify with apksigner
       - name: Sign Release APK
@@ -121,6 +130,50 @@ jobs:
         run: |
           USE_CUSTOM=false
 
-          # Test if the secret keystore is valid before using it
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | ba
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks 2>/dev/null || true
+            if [ -f release.jks ] && keytool -list -v -keystore release.jks -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+              echo "Custom secret keystore validated successfully!"
+              SIGN_KEY="release.jks"
+              SIGN_PASS="$KEYSTORE_PASSWORD"
+              TARGET_ALIAS=$(keytool -list -v -keystore release.jks -storepass "$SIGN_PASS" 2>/dev/null | grep -B2 "PrivateKeyEntry" | grep "Alias name:" | head -n 1 | sed 's/Alias name: //' | tr -d '\r\n')
+              USE_CUSTOM=true
+            else
+              echo "Secret KEYSTORE_BASE64 is invalid. Falling back to generated release keystore."
+            fi
+          fi
+
+          if [ "$USE_CUSTOM" = false ]; then
+            SIGN_KEY="TMessagesProj/config/release.keystore"
+            SIGN_PASS="telegram123"
+            TARGET_ALIAS="telegramKey"
+          fi
+
+          APK_FILE=$(find . -path "*/build/outputs/apk/*release*/*.apk" -o -path "*/build/outputs/apk/*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No release APK found!"
+            find . -name "*.apk"
+            exit 1
+          fi
+          echo "Found APK to sign at: $APK_FILE"
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+
+          "$APKSIGNER" sign \
+            --ks "$SIGN_KEY" \
+            --ks-key-alias "$TARGET_ALIAS" \
+            --ks-pass "pass:$SIGN_PASS" \
+            --key-pass "pass:$SIGN_PASS" \
+            --out app-arm64-v8a-signed.apk \
+            "$APK_FILE"
+
+          "$APKSIGNER" verify app-arm64-v8a-signed.apk
+          echo "APK signed and verified successfully!"
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-arm64-v8a-release-signed
+          path: app-arm64-v8a-signed.apk
+          if-no-files-found: error
+          retention-days: 14
