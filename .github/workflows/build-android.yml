@@ -170,12 +170,13 @@ jobs:
           if [ -z "$KEY_PASSWORD" ]; then KEY_PASSWORD="$KEYSTORE_PASSWORD"; fi
 
           touch gradle.properties
-          sed -i -E '/^(RELEASE_STORE_PASSWORD|RELEASE_KEY_ALIAS|RELEASE_KEY_PASSWORD|android\.injected\.build\.abi|android\.enableR8\.fullMode|org\.gradle\.jvmargs|org\.gradle\.workers\.max)=/d' gradle.properties
+          sed -i -E '/^(RELEASE_STORE_PASSWORD|RELEASE_KEY_ALIAS|RELEASE_KEY_PASSWORD|android\.injected\.build\.abi|android\.enableR8\.fullMode|android\.disableResourceValidation|org\.gradle\.jvmargs|org\.gradle\.workers\.max)=/d' gradle.properties
 
           echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> gradle.properties
           echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> gradle.properties
           echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> gradle.properties
           echo "android.enableR8.fullMode=false" >> gradle.properties
+          echo "android.disableResourceValidation=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.workers.max=2" >> gradle.properties
 
