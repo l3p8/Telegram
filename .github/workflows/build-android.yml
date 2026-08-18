@@ -76,7 +76,7 @@ jobs:
           find . \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | xargs -0 -r sed -i \
             "s/apply plugin: 'com.google.gms.google-services'/\/\/ apply plugin: 'com.google.gms.google-services'/g; s/apply plugin: \"com.google.gms.google-services\"/\/\/ apply plugin: \"com.google.gms.google-services\"/g"
 
-          find . -name "google-services.json" -print0 | xargs -0 -r sed -i \
+          find . -name "*.json" -print0 | xargs -0 -r sed -i \
             's/org\.telegram\.messenger/org.telegram.messenger.mod/g'
 
           # Inject API ID and Hash safely using single quotes and variable injection
