@@ -90,6 +90,14 @@ jobs:
           find . -name "*.java" -print0 | xargs -0 -r sed -i \
             's/import org\.telegram\.messenger\.R;/import org.telegram.messenger.mod.R;/g; s/import org\.telegram\.messenger\.BuildConfig;/import org.telegram.messenger.mod.BuildConfig;/g'
 
+          # Fix package declarations in Java files (org.telegram.messenger -> org.telegram.messenger.mod)
+          find . -name "*.java" -print0 | xargs -0 -r sed -i \
+            's/^package org\.telegram\.messenger;/package org.telegram.messenger.mod;/g'
+
+          # Add missing imports for R and BuildConfig in files that use them without imports
+          find . -name "*.java" -print0 | xargs -0 -r sed -i \
+            '/^package org\.telegram\.messenger\.mod;/a import org.telegram.messenger.mod.R;\nimport org.telegram.messenger.mod.BuildConfig;'
+
           find . \( -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" \) -print0 | xargs -0 -r sed -i \
             's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
 
