@@ -86,6 +86,10 @@ jobs:
           find . -name "BuildVars.java" -print0 | xargs -0 -r sed -i \
             's/"org\.telegram\.messenger"/"org.telegram.messenger.mod"/g'
 
+          # Fix Java imports: replace org.telegram.messenger.R and org.telegram.messenger.BuildConfig
+          find . -name "*.java" -print0 | xargs -0 -r sed -i \
+            's/import org\.telegram\.messenger\.R;/import org.telegram.messenger.mod.R;/g; s/import org\.telegram\.messenger\.BuildConfig;/import org.telegram.messenger.mod.BuildConfig;/g'
+
           find . \( -name "auth.xml" -o -name "authenticator.xml" -o -name "sync_contacts.xml" \) -print0 | xargs -0 -r sed -i \
             's/org\.telegram\.messenger\.id/org.telegram.messenger.mod.id/g; s/org\.telegram\.messenger\.account/org.telegram.messenger.mod.account/g'
 
